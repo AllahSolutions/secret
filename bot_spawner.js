@@ -4,6 +4,10 @@ const { HttpsProxyAgent } = require("https-proxy-agent");
 const { SocksProxyAgent } = require("socks-proxy-agent");
 const fakeUserAgent = require("fake-useragent");
 const http = require("http");
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+
+puppeteer.use(StealthPlugin());
 
 // ==========================================
 // HTTP SERVER (FOR RENDER KEEPALIVE)
@@ -12,6 +16,8 @@ const PORT = process.env.PORT || 3000;
 let startTime = Date.now();
 let activeBots = 0;
 let totalLaunched = 0;
+let cfClearance = "";
+let cfUserAgent = "";
 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/html" });
@@ -19,9 +25,10 @@ const server = http.createServer((req, res) => {
         <html style="background:#0d1117; color:#c9d1d9; font-family:monospace;">
             <head><meta http-equiv="refresh" content="5"></head>
             <body style="display:flex; justify-content:center; align-items:center; height:100vh; flex-direction:column;">
-                <h1 style="color:#58a6ff;">🤖 Tanchiki Bot Spawner v4.0</h1>
+                <h1 style="color:#58a6ff;">🤖 Tanchiki Bot Spawner v5.0 (CF Bypass)</h1>
                 <div style="border:1px solid #30363d; padding:20px; border-radius:6px; background:#161b22; width:300px;">
                     <p>Status: <span style="color:#3fb950">● ONLINE</span></p>
+                    <p>CF Cookie: <b>${cfClearance ? "✅ FOUND" : "❌ MISSING"}</b></p>
                     <p>Active Bots: <b>${activeBots}</b></p>
                     <p>Total Launched: <b>${totalLaunched}</b></p>
                     <p>Uptime: <b>${Math.floor((Date.now() - startTime) / 1000)}s</b></p>
@@ -87,13 +94,82 @@ function createAgent(proxyUrl) {
     }
 }
 
+// ==========================================
+// CLOUDFLARE SOLVER
+// ==========================================
+async function solveCloudflare() {
+    console.log("🔍 Solving Cloudflare Challenge...");
+
+    // Launch browser
+    const browser = await puppeteer.launch({
+        headless: "new",
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+            '--disable-gpu'
+        ]
+    });
+
+    try {
+        const page = await browser.newPage();
+
+        // Go to site
+        await page.goto(TARGET_URL, { waitUntil: 'networkidle0', timeout: 60000 });
+
+        // Wait for challenge to solve
+        console.log("⏳ Waiting for Turnstile...");
+        try {
+            await page.waitForFunction(() => {
+                // Check if challenge is solved or main content loaded
+                // Usually indicated by disappearance of challenge iframe or appearance of game content
+                // Or existence of cf_clearance cookie
+                return document.title.includes("Tanchiki") || !document.querySelector('#cf-turnstile');
+            }, { timeout: 30000 });
+        } catch (e) {
+            console.log("⚠️ Turnstile wait timeout, checking cookies anyway...");
+        }
+
+        // Get cookies
+        const cookies = await page.cookies();
+        const clearanceCookie = cookies.find(c => c.name === 'cf_clearance');
+        const userAgent = await page.evaluate(() => navigator.userAgent);
+
+        if (clearanceCookie) {
+            cfClearance = `${clearanceCookie.name}=${clearanceCookie.value}`;
+            cfUserAgent = userAgent;
+            console.log(`✅ Cloudflare Solved! Token: ${cfClearance.substring(0, 20)}...`);
+            console.log(`👤 User-Agent: ${cfUserAgent}`);
+
+            await browser.close();
+            return true;
+        } else {
+            console.error("❌ Failed to get cf_clearance cookie.");
+            await browser.close();
+            return false;
+        }
+
+    } catch (error) {
+        console.error("❌ Solver Error:", error.message);
+        await browser.close();
+        return false;
+    }
+}
+
+// ==========================================
+// BOT LOGIC
+// ==========================================
 class Bot {
     constructor(id, proxy) {
         this.id = id;
         this.proxy = proxy;
         this.socket = null;
         this.nickname = `w2mpu_${Math.floor(Math.random() * 99999)}`;
-        this.userAgent = fakeUserAgent();
+        this.userAgent = cfUserAgent || fakeUserAgent(); // Use solved UA
         this.moveInterval = null;
         this.gameState = null;
         this.myPosition = { x: 0, z: 0 };
@@ -104,16 +180,18 @@ class Bot {
         const agent = createAgent(this.proxy);
         if (!agent) return;
 
-        console.log(`[Bot ${this.id}] Connecting via ${this.proxy}...`);
+        // Add CF cookies to headers
+        const connectionHeaders = {
+            ...HEADERS,
+            "User-Agent": this.userAgent,
+            "Cookie": cfClearance // Vital for bypass
+        };
 
         const options = {
             transports: ["websocket"],
             agent: agent,
             rejectUnauthorized: false,
-            extraHeaders: {
-                ...HEADERS,
-                "User-Agent": this.userAgent
-            },
+            extraHeaders: connectionHeaders,
             reconnection: false,
             timeout: CONNECT_TIMEOUT,
             forceNew: true
@@ -132,7 +210,7 @@ class Bot {
         });
 
         this.socket.on("connect_error", (err) => {
-            console.log(`❌ [Bot ${this.id}] Connect Failed (${err.message})`);
+            // console.log(`❌ [Bot ${this.id}] Connect Failed: ${err.message}`);
             this.disconnect();
         });
 
@@ -142,7 +220,6 @@ class Bot {
         });
 
         this.socket.on("serverFull", () => {
-            console.log(`⚠️ [Bot ${this.id}] Server Full`);
             this.disconnect();
         });
 
@@ -234,9 +311,17 @@ class Bot {
 }
 
 async function startSpam() {
-    console.log("🚀 STARTING BOT SPAWNER v4.0 (Web Server Included)");
+    console.log("🚀 STARTING BOT SPAWNER v5.0 (CF Bypass)");
 
     process.on('uncaughtException', (err) => { });
+
+    // First, solve Cloudflare to get tokens
+    const success = await solveCloudflare();
+    if (!success) {
+        console.log("⚠️ Could not solve CF challenge. Retrying in 10s...");
+        setTimeout(startSpam, 10000); // Retry logic
+        return;
+    }
 
     const proxies = await getProxies();
     if (proxies.length === 0) return;
@@ -252,11 +337,17 @@ async function startSpam() {
         }
     }
 
-    console.log("All proxies processed. Waiting for connections...");
+    console.log("All proxies processed.");
 
     setInterval(() => {
         console.log(`[STATS] Active Bots: ${activeBots} | Total Launched: ${totalLaunched}`);
     }, 5000);
+
+    // Refresh CF token every 10 minutes (cookies expire)
+    setInterval(async () => {
+        console.log("🔄 Refreshing Cloudflare Token...");
+        await solveCloudflare();
+    }, 600000);
 }
 
 startSpam();

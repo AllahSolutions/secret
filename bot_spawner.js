@@ -64,6 +64,7 @@ class Bot {
         this.moveInterval = null;
         this.gameState = null;
         this.myPosition = { x: 0, z: 0 };
+        this.lastShotTime = 0;
     }
 
     connect() {
@@ -115,11 +116,18 @@ class Bot {
         // Listen for game state updates to track enemies
         this.socket.on("gameState", (state) => {
             this.gameState = state;
-            if (state.players) {
-                const me = state.players.find(p => p.id === this.socket.id);
-                if (me) {
-                    this.myPosition = { x: me.x, z: me.z };
-                }
+
+            // Handle array or object structure depending on serialization
+            let players = [];
+            if (state.players && Array.isArray(state.players)) {
+                players = state.players;
+            } else if (state.players) {
+                players = Object.values(state.players);
+            }
+
+            const me = players.find(p => p.id === this.socket.id);
+            if (me) {
+                this.myPosition = { x: me.x, z: me.z };
             }
         });
     }
@@ -136,18 +144,24 @@ class Bot {
             if (!this.socket || !this.socket.connected) return;
 
             let angle = Math.random() * 6.28;
-            let shooting = false;
+            let shouldShoot = false;
 
             // Simple Auto-Aim Logic
             if (this.gameState && this.gameState.players) {
+                let players = Array.isArray(this.gameState.players) ? this.gameState.players : Object.values(this.gameState.players);
+
                 let nearest = null;
                 let minDst = Infinity;
 
-                for (const player of this.gameState.players) {
+                for (const player of players) {
                     // Skip myself
                     if (player.id === this.socket.id) continue;
-                    // Skip teammates if applicable (checking for bot prefix)
-                    // if (player.n.startsWith("w2mpu_")) continue; // Optional: don't shoot other bots
+
+                    // Skip if dead (check both flag and hp)
+                    if (player.a === false || player.hp <= 0) continue;
+
+                    // Skip teammates (optional, checking prefix)
+                    if (player.n && player.n.startsWith("w2mpu_")) continue;
 
                     const dx = player.x - this.myPosition.x;
                     const dz = player.z - this.myPosition.z;
@@ -162,19 +176,29 @@ class Bot {
                 if (nearest) {
                     // Aim at nearest player
                     angle = Math.atan2(nearest.dx, -nearest.dz);
-                    shooting = true; // Shoot when target found
+                    shouldShoot = true;
                 }
             }
 
+            // Send input update
             this.socket.emit("input", {
                 up: Math.random() > 0.5,
                 down: Math.random() > 0.5,
                 left: Math.random() > 0.5,
                 right: Math.random() > 0.5,
                 angle: angle,
-                shooting: shooting
+                shooting: shouldShoot
             });
-        }, 200); // Higher tickrate for aiming
+
+            // TRIGGER SHOOTING MANUALLY
+            if (shouldShoot) {
+                const now = Date.now();
+                if (now - this.lastShotTime >= 1000) { // Server cooldown 1000ms
+                    this.socket.emit("shoot");
+                    this.lastShotTime = now;
+                }
+            }
+        }, 200);
     }
 
     disconnect() {

@@ -3,7 +3,42 @@ const axios = require("axios");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 const { SocksProxyAgent } = require("socks-proxy-agent");
 const fakeUserAgent = require("fake-useragent");
+const http = require("http");
 
+// ==========================================
+// HTTP SERVER (FOR RENDER KEEPALIVE)
+// ==========================================
+const PORT = process.env.PORT || 3000;
+let startTime = Date.now();
+let activeBots = 0;
+let totalLaunched = 0;
+
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(`
+        <html style="background:#0d1117; color:#c9d1d9; font-family:monospace;">
+            <head><meta http-equiv="refresh" content="5"></head>
+            <body style="display:flex; justify-content:center; align-items:center; height:100vh; flex-direction:column;">
+                <h1 style="color:#58a6ff;">🤖 Tanchiki Bot Spawner v4.0</h1>
+                <div style="border:1px solid #30363d; padding:20px; border-radius:6px; background:#161b22; width:300px;">
+                    <p>Status: <span style="color:#3fb950">● ONLINE</span></p>
+                    <p>Active Bots: <b>${activeBots}</b></p>
+                    <p>Total Launched: <b>${totalLaunched}</b></p>
+                    <p>Uptime: <b>${Math.floor((Date.now() - startTime) / 1000)}s</b></p>
+                </div>
+                <p style="margin-top:20px; color:#8b949e; font-size:12px;">Refreshes every 5s</p>
+            </body>
+        </html>
+    `);
+});
+
+server.listen(PORT, () => {
+    console.log(`🌐 Landing page running on port ${PORT}`);
+});
+
+// ==========================================
+// BOT CONFIG
+// ==========================================
 const TARGET_URL = "https://neurochel.tech";
 const PROXY_LIST_URL = "https://advanced.name/freeproxy/6991d73bd4112";
 
@@ -18,8 +53,6 @@ const HEADERS = {
 const BOTS_PER_PROXY = 1;
 const CONNECT_TIMEOUT = 30000;
 const SPAWN_INTERVAL = 100;
-
-let activeBots = 0;
 
 async function getProxies() {
     try {
@@ -50,7 +83,7 @@ function createAgent(proxyUrl) {
             return new HttpsProxyAgent(proxyUrl);
         }
     } catch (e) {
-        return null; // Invalid proxy format
+        return null;
     }
 }
 
@@ -113,11 +146,9 @@ class Bot {
             this.disconnect();
         });
 
-        // Listen for game state updates to track enemies
         this.socket.on("gameState", (state) => {
             this.gameState = state;
 
-            // Handle array or object structure depending on serialization
             let players = [];
             if (state.players && Array.isArray(state.players)) {
                 players = state.players;
@@ -146,7 +177,6 @@ class Bot {
             let angle = Math.random() * 6.28;
             let shouldShoot = false;
 
-            // Simple Auto-Aim Logic
             if (this.gameState && this.gameState.players) {
                 let players = Array.isArray(this.gameState.players) ? this.gameState.players : Object.values(this.gameState.players);
 
@@ -154,13 +184,8 @@ class Bot {
                 let minDst = Infinity;
 
                 for (const player of players) {
-                    // Skip myself
                     if (player.id === this.socket.id) continue;
-
-                    // Skip if dead (check both flag and hp)
                     if (player.a === false || player.hp <= 0) continue;
-
-                    // Skip teammates (optional, checking prefix)
                     if (player.n && player.n.startsWith("w2mpu_")) continue;
 
                     const dx = player.x - this.myPosition.x;
@@ -174,13 +199,11 @@ class Bot {
                 }
 
                 if (nearest) {
-                    // Aim at nearest player
                     angle = Math.atan2(nearest.dx, -nearest.dz);
                     shouldShoot = true;
                 }
             }
 
-            // Send input update
             this.socket.emit("input", {
                 up: Math.random() > 0.5,
                 down: Math.random() > 0.5,
@@ -190,10 +213,9 @@ class Bot {
                 shooting: shouldShoot
             });
 
-            // TRIGGER SHOOTING MANUALLY
             if (shouldShoot) {
                 const now = Date.now();
-                if (now - this.lastShotTime >= 1000) { // Server cooldown 1000ms
+                if (now - this.lastShotTime >= 1000) {
                     this.socket.emit("shoot");
                     this.lastShotTime = now;
                 }
@@ -212,7 +234,7 @@ class Bot {
 }
 
 async function startSpam() {
-    console.log("🚀 STARTING BOT SPAWNER v3.0 (Auto-Aim Edition)");
+    console.log("🚀 STARTING BOT SPAWNER v4.0 (Web Server Included)");
 
     process.on('uncaughtException', (err) => { });
 
@@ -225,6 +247,7 @@ async function startSpam() {
         for (let i = 0; i < BOTS_PER_PROXY; i++) {
             const bot = new Bot(botId++, proxy);
             bot.connect();
+            totalLaunched++;
             await new Promise(r => setTimeout(r, SPAWN_INTERVAL));
         }
     }
@@ -232,7 +255,7 @@ async function startSpam() {
     console.log("All proxies processed. Waiting for connections...");
 
     setInterval(() => {
-        console.log(`[STATS] Active Bots: ${activeBots} | Total Launched: ${botId - 1}`);
+        console.log(`[STATS] Active Bots: ${activeBots} | Total Launched: ${totalLaunched}`);
     }, 5000);
 }
 

@@ -1,0 +1,21 @@
+{
+  "dependencies": {
+    "axios": "^1.13.5",
+    "fake-useragent": "^1.0.1",
+    "https-proxy-agent": "^7.0.6",
+    "socket.io-client": "^4.8.3",
+    "socks-proxy-agent": "^8.0.5"
+  },
+  "name": "tanchiki",
+  "version": "1.0.0",
+  "description": "A real-time multiplayer .io game built with Three.js and Socket.io.",
+  "main": "bot_spawner.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node bot_spawner.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
